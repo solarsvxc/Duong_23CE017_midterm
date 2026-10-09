@@ -2,7 +2,8 @@
 # Each case uses real operands and exact, independently derived output.
 set -eu
 LC_ALL=C
-export LC_ALL
+TZ=UTC
+export LC_ALL TZ
 
 binary_input=${1:-./my_ls}
 binary=$(cd "$(dirname "$binary_input")" && pwd)/$(basename "$binary_input")
@@ -304,6 +305,98 @@ q_w_rightmost()
     expect_hex '613f620a'
 }
 
+# Long cases use file operands so the later directory-total task can add
+# its own coverage without changing these field expectations.
+long_fixture()
+{
+    printf 'abc' > sample
+    chmod 0644 sample
+    touch -t 202601020304.00 sample
+}
+
+# Break caught: -n failing to enable long output or resolving account names.
+numeric_long_fields()
+{
+    long_fixture
+    run_listing -n sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 Jan  2 03:04 sample
+"
+}
+
+# Break caught: -l always printing numeric IDs despite real database names.
+named_long_fields()
+{
+    long_fixture
+    run_listing -l sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -un) $(id -gn) 3 Jan  2 03:04 sample
+"
+}
+
+# Break caught: missing arrow, dereferencing a dangling link, or losing -F.
+long_symlink_arrow()
+{
+    ln -s absent linked
+    touch -h -t 202601020304.00 linked
+    run_listing -nF linked
+    expect_success
+    expect_output "lrwxrwxrwx 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked@ -> absent
+"
+}
+
+# Break caught: defaulting to ctime/atime or substituting a year for HH:MM.
+long_timestamp_mtime()
+{
+    long_fixture
+    touch -a -t 202602030405.00 sample
+    run_listing -n sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 Jan  2 03:04 sample
+"
+}
+
+# ctime cannot be assigned by touch. FreeBSD stat supplies the actual
+# fixture ctime; mtime and atime remain independently assigned literals.
+# Break caught: first-wins c/u selection or ignoring either selected time.
+c_u_rightmost()
+{
+    long_fixture
+    touch -a -t 202602030405.00 sample
+    ctime=$(stat -f '%Sc' -t '%b %e %H:%M' sample)
+    for flags in '-ncu' '-nc -u'; do
+        # Intentional word splitting exercises separate option arguments.
+        run_listing $flags sample
+        expect_success
+        expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 Feb  3 04:05 sample
+"
+    done
+    for flags in '-nuc' '-nu -c'; do
+        run_listing $flags sample
+        expect_success
+        expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 $ctime sample
+"
+    done
+}
+
+# Break caught: first-wins l/n or treating -l as disabling long output.
+l_n_rightmost()
+{
+    long_fixture
+    for flags in '-ln' '-l -n'; do
+        run_listing $flags sample
+        expect_success
+        expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 Jan  2 03:04 sample
+"
+    done
+    for flags in '-nl' '-n -l'; do
+        run_listing $flags sample
+        expect_success
+        expect_output "-rw-r--r-- 1 $(id -un) $(id -gn) 3 Jan  2 03:04 sample
+"
+    done
+}
+
 run_case()
 (
     case_name=$1
@@ -322,7 +415,9 @@ for case_name in no_operands single_file_operand mixed_files_before_directory \
     operand_after_double_dash unknown_option missing_operand_continues \
     reverse_groups directory_as_file_unsorted directory_symlink_operand \
     classify_fixture q_replaces_control_byte w_preserves_control_byte \
-    terminal_default_is_unit_tested q_w_rightmost
+    terminal_default_is_unit_tested q_w_rightmost numeric_long_fields \
+    named_long_fields long_symlink_arrow long_timestamp_mtime \
+    c_u_rightmost l_n_rightmost
 do
     run_case "$case_name"
 done
