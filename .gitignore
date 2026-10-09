@@ -5,6 +5,7 @@ tests/test_options
 tests/test_entry
 tests/test_sort
 tests/test_format
+tests/test_main
 core
 core.*
 tmp/

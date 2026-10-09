@@ -59,6 +59,49 @@ static void checked_free(void *pointer)
     free(pointer);
 }
 
+#if defined(__FreeBSD__) && defined(DT_WHT) && defined(S_IFWHT) && \
+    defined(DTF_HIDEW) && defined(DTF_NODUP)
+/* Inject only libc enumeration: the actual collector still joins paths,
+ * filters names, calls real lstat, constructs entries, and releases ownership.
+ * A normal opendir hides the fixture exactly as FreeBSD's DTF_HIDEW does. */
+static bool whiteout_scan;
+static bool whiteout_visible;
+static bool whiteout_returned;
+
+static DIR *scan_opendir(const char *path)
+{
+    whiteout_visible = false;
+    return opendir(path);
+}
+
+static DIR *scan_opendir2(const char *path, int flags)
+{
+    whiteout_visible = (flags & DTF_HIDEW) == 0;
+    return __opendir2(path, flags);
+}
+
+static struct dirent *scan_readdir(DIR *directory)
+{
+    static struct dirent whiteout;
+    if (!whiteout_scan)
+        return readdir(directory);
+    if (!whiteout_visible || whiteout_returned)
+        return NULL;
+    whiteout_returned = true;
+    memset(&whiteout, 0, sizeof(whiteout));
+    whiteout.d_fileno = 1;
+    whiteout.d_type = DT_WHT;
+    whiteout.d_namlen = 8;
+    whiteout.d_reclen = (unsigned short)sizeof(whiteout);
+    memcpy(whiteout.d_name, "whiteout", 9);
+    return &whiteout;
+}
+
+#define opendir scan_opendir
+#define __opendir2 scan_opendir2
+#define readdir scan_readdir
+#endif
+
 /* Compile the unchanged module with local allocator substitution. The normal
  * src/entry.o is also a prerequisite, so its standalone build is checked. */
 #define malloc checked_malloc
@@ -68,6 +111,12 @@ static void checked_free(void *pointer)
 #undef free
 #undef realloc
 #undef malloc
+#if defined(__FreeBSD__) && defined(DT_WHT) && defined(S_IFWHT) && \
+    defined(DTF_HIDEW) && defined(DTF_NODUP)
+#undef readdir
+#undef __opendir2
+#undef opendir
+#endif
 
 static char *fixture_path(const char *directory, const char *name)
 {
@@ -275,6 +324,49 @@ static void conditional_whiteout_without_lstat(void)
 #endif
 }
 
+/* Replacing the whiteout-visible open with ordinary opendir loses this entry
+ * before the collector can exercise its real metadata fallback. */
+static void conditional_whiteout_directory_collection(void)
+{
+#if defined(__FreeBSD__) && defined(DT_WHT) && defined(S_IFWHT) && \
+    defined(DTF_HIDEW) && defined(DTF_NODUP)
+    EntryList list;
+    Options options;
+    char *root = fixture_create();
+    char *path = fixture_path(root, "whiteout");
+    const Entry *entry;
+    DIR *hidden;
+    FILE *err = tmpfile();
+    assert(err != NULL);
+    options_init(&options, false, (uid_t)1000, NULL);
+    entry_list_init(&list);
+    whiteout_scan = true;
+    whiteout_returned = false;
+    hidden = scan_opendir(root);
+    assert(hidden != NULL);
+    assert(scan_readdir(hidden) == NULL);
+    assert(closedir(hidden) == 0);
+    assert(entry_list_read_directory(&list, root, &options, err) == 0);
+    whiteout_scan = false;
+    assert(list.length == 1);
+    entry = find_entry(&list, "whiteout");
+    assert(entry != NULL);
+    assert(strcmp(entry->path, path) == 0);
+    assert(entry->dirent_type == DT_WHT);
+    assert((entry->st.st_mode & S_IFMT) == S_IFWHT);
+    assert(!entry->metadata_valid && !entry->is_operand);
+    assert(!entry_operand_is_directory(entry, false));
+    assert(ftell(err) == 0);
+    assert(fclose(err) == 0);
+    entry_list_destroy(&list);
+    assert(live_allocations == 0);
+    free(path);
+    fixture_destroy(root);
+#else
+    puts("SKIP whiteout enumeration: FreeBSD API unavailable");
+#endif
+}
+
 /* Fail every real allocation, including target/list growth; failed additions
  * must preserve existing entries and leave no unowned temporary strings. */
 static void partial_failure_cleans_up(void)
@@ -432,6 +524,7 @@ int main(void)
         {"all_includes_dot_entries", all_includes_dot_entries},
         {"missing_path_returns_error", missing_path_returns_error},
         {"conditional_whiteout_without_lstat", conditional_whiteout_without_lstat},
+        {"conditional_whiteout_directory_collection", conditional_whiteout_directory_collection},
         {"partial_failure_cleans_up", partial_failure_cleans_up},
         {"long_nested_path", long_nested_path},
         {"readdir_order_and_trailing_slash", readdir_order_and_trailing_slash}
@@ -441,6 +534,6 @@ int main(void)
         tests[i].run();
         printf("PASS %s\n", tests[i].name);
     }
-    puts("All 9 entry tests passed.");
+    puts("All 10 entry tests passed.");
     return 0;
 }

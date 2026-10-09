@@ -471,6 +471,37 @@ w_preserves_control_byte()
     expect_hex '6101620a'
 }
 
+# Break caught: printing raw directory operands in multiple-directory headings.
+# Lookup must still use the newline/control-byte names under -q.
+multiple_directory_heading_bytes()
+{
+    name=$(printf 'a\001\nb')
+    mkdir "$name" z
+    touch "$name/leaf"
+    run_listing -q "$name" z
+    expect_success
+    expect_hex '613f3f623a0a6c6561660a0a7a3a0a'
+    run_listing -w "$name" z
+    expect_success
+    expect_hex '61010a623a0a6c6561660a0a7a3a0a'
+}
+
+# Break caught: sanitizing entries but bypassing name policy on recursive paths,
+# or passing a sanitized heading back to directory traversal.
+recursive_heading_bytes()
+{
+    name=$(printf 'a\001\nb')
+    child=$(printf 'c\002\nd')
+    mkdir -p "$name/$child"
+    touch "$name/$child/leaf"
+    run_listing -qR "$name"
+    expect_success
+    expect_hex '613f3f623a0a633f3f640a0a613f3f622f633f3f643a0a6c6561660a'
+    run_listing -wR "$name"
+    expect_success
+    expect_hex '61010a623a0a63020a640a0a61010a622f63020a643a0a6c6561660a'
+}
+
 # TTY=true is exercised by the formatter unit suite; this CLI checks the
 # actual redirected stdout default without depending on a pseudo-terminal.
 terminal_default_is_unit_tested()
@@ -974,7 +1005,7 @@ clean_rebuild()
         "${MAKE:-make}" clean
         for artifact in my_ls src/main.o src/options.o src/entry.o \
             src/sort.o src/format.o tests/test_options tests/test_entry \
-            tests/test_sort tests/test_format; do
+            tests/test_sort tests/test_format tests/test_main; do
             [ ! -e "$artifact" ]
         done
         [ -z "$(find src tests -name '*.o' -print)" ]
@@ -995,7 +1026,7 @@ clean_rebuild()
         "${MAKE:-make}" clean
         for artifact in my_ls src/main.o src/options.o src/entry.o \
             src/sort.o src/format.o tests/test_options tests/test_entry \
-            tests/test_sort tests/test_format; do
+            tests/test_sort tests/test_format tests/test_main; do
             [ ! -e "$artifact" ]
         done
         [ -z "$(find src tests -name '*.o' -print)" ]
@@ -1034,6 +1065,7 @@ for case_name in no_operands single_file_operand mixed_files_before_directory \
     recursive_does_not_follow_child_symlink symlink_cycle_not_followed \
     R_d_rightmost unreadable_child_continues_when_not_root \
     classify_fixture q_replaces_control_byte w_preserves_control_byte \
+    multiple_directory_heading_bytes recursive_heading_bytes \
     terminal_default_is_unit_tested q_w_rightmost numeric_long_fields \
     named_long_fields long_symlink_arrow long_timestamp_mtime \
     c_u_rightmost l_n_rightmost inode_prefix blocksize_512_and_1k \

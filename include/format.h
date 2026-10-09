@@ -24,8 +24,11 @@ uintmax_t format_block_units(blkcnt_t blocks_512, uint64_t unit_bytes);
 int format_human_size(uintmax_t bytes, char *buffer, size_t size);
 
 /* Write one short or aligned long entry per line without changing entries.
- * Return -1 on allocation, conversion, or output failure. */
+ * Return -1 on allocation, conversion, or output failure, preserving errno.
+ * On failure, error_path (if non-NULL) borrows the affected entry's path;
+ * NULL means a listing-wide error with no entry. ferror(out) distinguishes
+ * stream failures from formatting failures. */
 int format_listing(FILE *out, const EntryList *, const Options *,
-    bool directory_contents);
+    bool directory_contents, const char **error_path);
 
 #endif

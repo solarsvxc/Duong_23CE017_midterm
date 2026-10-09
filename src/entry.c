@@ -177,8 +177,16 @@ static bool include_name(const char *name, const Options *options)
 int entry_list_read_directory(EntryList *list, const char *path,
     const Options *options, FILE *err)
 {
-    DIR *directory = opendir(path);
+    DIR *directory;
     int first_error = 0;
+#if defined(__FreeBSD__) && defined(DT_WHT) && defined(S_IFWHT) && \
+    defined(DTF_HIDEW) && defined(DTF_NODUP)
+    /* FreeBSD opendir enables DTF_HIDEW. Retain duplicate suppression but
+     * expose DT_WHT entries so the metadata fallback can preserve them. */
+    directory = __opendir2(path, DTF_NODUP);
+#else
+    directory = opendir(path);
+#endif
     if (directory == NULL)
         return entry_error(err, path, errno);
     for (;;) {

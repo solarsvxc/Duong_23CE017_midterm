@@ -420,7 +420,7 @@ static int print_prefix(FILE *out, const PrefixFields *fields,
 }
 
 static int long_listing(FILE *out, const EntryList *list,
-    const Options *options)
+    const Options *options, const char **error_path)
 {
     LongFields *fields;
     LongWidths widths = {0};
@@ -438,6 +438,8 @@ static int long_listing(FILE *out, const EntryList *list,
     if (fields == NULL)
         return -1;
     for (i = 0; i < list->length; ++i) {
+        if (error_path != NULL)
+            *error_path = list->items[i].path;
         if (prefix_fields(&list->items[i], options, &fields[i].prefix) != 0 ||
             long_fields(&list->items[i], options, &fields[i]) != 0)
             goto cleanup;
@@ -452,9 +454,12 @@ static int long_listing(FILE *out, const EntryList *list,
         const Entry *entry = &list->items[i];
         char mode[11];
         char suffix = options->classify ? format_type_suffix(entry) : '\0';
-        char *name = format_display_name(entry->name, options->name_mode);
+        char *name;
         int written;
 
+        if (error_path != NULL)
+            *error_path = entry->path;
+        name = format_display_name(entry->name, options->name_mode);
         if (name == NULL)
             goto cleanup;
         format_mode(entry->st.st_mode, entry->dirent_type, mode);
@@ -470,7 +475,9 @@ static int long_listing(FILE *out, const EntryList *list,
             written = -1;
         if (written >= 0)
             written = fputs(name, out);
+        error = errno;
         free(name);
+        errno = error;
         if (written < 0)
             goto cleanup;
         if (suffix != '\0' && fputc(suffix, out) == EOF)
@@ -495,11 +502,13 @@ cleanup:
 }
 
 int format_listing(FILE *out, const EntryList *list, const Options *options,
-    bool directory_contents)
+    bool directory_contents, const char **error_path)
 {
     size_t i;
     PrefixWidths widths = {0};
 
+    if (error_path != NULL)
+        *error_path = NULL;
     if (directory_contents && (options->long_format ||
         (options->show_blocks && options->stdout_is_tty))) {
         BlockSum sum = {0};
@@ -511,21 +520,25 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
             return -1;
     }
     if (options->long_format)
-        return long_listing(out, list, options);
+        return long_listing(out, list, options, error_path);
     for (i = 0; i < list->length; ++i) {
         PrefixFields fields;
+        if (error_path != NULL)
+            *error_path = list->items[i].path;
         if (prefix_fields(&list->items[i], options, &fields) != 0)
             return -1;
         measure_prefix(&widths, &fields, options);
     }
     for (i = 0; i < list->length; ++i) {
         PrefixFields fields;
-        char *name = format_display_name(list->items[i].name,
-            options->name_mode);
+        char *name;
         char suffix = options->classify ?
             format_type_suffix(&list->items[i]) : '\0';
-        int result;
+        int result, error;
 
+        if (error_path != NULL)
+            *error_path = list->items[i].path;
+        name = format_display_name(list->items[i].name, options->name_mode);
         if (name == NULL)
             return -1;
         result = prefix_fields(&list->items[i], options, &fields);
@@ -534,7 +547,9 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
         if (result == 0)
             result = suffix == '\0' ? fprintf(out, "%s\n", name) :
                 fprintf(out, "%s%c\n", name, suffix);
+        error = errno;
         free(name);
+        errno = error;
         if (result < 0)
             return -1;
     }

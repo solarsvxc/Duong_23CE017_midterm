@@ -153,7 +153,16 @@ metadata. Character/block device formatting is tested synthetically; the CLI
 also checks `/dev/null` when available. Creating devices or whiteouts can
 require privileges and filesystem support, so no privileged creation is
 part of the test gate. FreeBSD whiteout collection and rendering are guarded
-by available `DT_WHT`/`S_IFWHT` constants, with corresponding synthetic tests.
+by available `DT_WHT`/`S_IFWHT` constants. The collector uses FreeBSD's
+`__opendir2(path, DTF_NODUP)` to expose whiteouts that ordinary `opendir`
+hides; its declaration and flags are in the official
+[FreeBSD dirent.h](https://github.com/freebsd/freebsd-src/blob/main/include/dirent.h).
+An injected libc enumeration fixture exercises collection through this open
+path and real `lstat` fallback, without creating a privileged whiteout.
+CLI byte fixtures cover multiple-directory and recursive headings under
+`-q` and `-w`. A dedicated command harness checks the terminal heading default
+and injected formatter allocation failures, including affected-path diagnostics
+and continued directory output. Stream failures remain standard-output errors.
 The manual's archive-state type markers have no fixture or implementation
 branch here; ordinary FreeBSD headers do not provide their mode constants.
 They remain a platform-specific limitation if such headers are introduced.

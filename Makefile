@@ -5,7 +5,7 @@ LDFLAGS =
 LDLIBS =
 
 OBJECTS = src/main.o src/options.o src/entry.o src/sort.o src/format.o
-TEST_PROGRAMS = tests/test_options tests/test_entry tests/test_sort tests/test_format
+TEST_PROGRAMS = tests/test_options tests/test_entry tests/test_sort tests/test_format tests/test_main
 
 all: my_ls
 
@@ -37,11 +37,15 @@ tests/test_sort: tests/test_sort.c src/sort.o include/sort.h include/entry.h inc
 tests/test_format: tests/test_format.c src/format.o src/options.o include/format.h include/entry.h include/options.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_format.c src/format.o src/options.o $(LDLIBS)
 
+tests/test_main: tests/test_main.c src/main.c src/format.c src/main.o src/format.o src/entry.o src/options.o src/sort.o include/format.h include/entry.h include/options.h include/sort.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_main.c src/entry.o src/options.o src/sort.o $(LDLIBS)
+
 unit-test: $(TEST_PROGRAMS)
 	./tests/test_options
 	./tests/test_entry
 	./tests/test_sort
 	./tests/test_format
+	./tests/test_main
 
 test: unit-test my_ls
 	MAKE="$(MAKE)" sh tests/test_ls.sh ./my_ls

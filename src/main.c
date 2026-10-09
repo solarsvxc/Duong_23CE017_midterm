@@ -64,6 +64,27 @@ static int group_operands(EntryList *owner, const Options *options,
     return 0;
 }
 
+static void report_format_error(const char *path, bool *had_error)
+{
+    int error = errno;
+    fprintf(stderr, "my_ls: %s: formatting: %s\n", path, strerror(error));
+    *had_error = true;
+}
+
+static void print_listing(const EntryList *list, const Options *options,
+    bool directory_contents, const char *path, bool *had_error,
+    bool *output_failed)
+{
+    const char *error_path;
+    if (format_listing(stdout, list, options, directory_contents,
+        &error_path) == 0)
+        return;
+    if (ferror(stdout))
+        *output_failed = true;
+    else
+        report_format_error(error_path == NULL ? path : error_path, had_error);
+}
+
 static void list_directory(const char *path, const Options *options,
     bool headings, bool *printed_section, bool *had_error, bool *output_failed)
 {
@@ -77,10 +98,17 @@ static void list_directory(const char *path, const Options *options,
     entry_list_sort(&contents, options);
     if (*printed_section && fputc('\n', stdout) == EOF)
         *output_failed = true;
-    if (headings && fprintf(stdout, "%s:\n", path) < 0)
-        *output_failed = true;
-    if (format_listing(stdout, &contents, options, true) != 0)
-        *output_failed = true;
+    if (headings) {
+        char *heading = format_display_name(path, options->name_mode);
+        if (heading == NULL)
+            report_format_error(path, had_error);
+        else {
+            if (fprintf(stdout, "%s:\n", heading) < 0)
+                *output_failed = true;
+            free(heading);
+        }
+    }
+    print_listing(&contents, options, true, path, had_error, output_failed);
     *printed_section = true;
 
     if (options->recursive) {
@@ -136,8 +164,8 @@ int main(int argc, char *argv[])
     entry_list_sort(&files, &options);
     entry_list_sort(&directories, &options);
     if (files.length != 0) {
-        if (format_listing(stdout, &files, &options, false) != 0)
-            output_failed = true;
+        print_listing(&files, &options, false, files.items[0].path,
+            &had_error, &output_failed);
         printed_section = true;
     }
 
