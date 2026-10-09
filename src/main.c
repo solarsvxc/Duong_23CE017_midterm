@@ -33,8 +33,7 @@ static int group_operands(EntryList *owner, const Options *options,
         return -1;
     for (i = 0; i < owner->length; ++i) {
         bool is_directory = !options->directory_as_file &&
-            entry_operand_is_directory(&owner->items[i],
-                options->long_format || options->classify);
+            entry_operand_is_directory(&owner->items[i], false);
         if (is_directory)
             grouped[--directory_start] = owner->items[i];
         else
@@ -65,13 +64,51 @@ static int group_operands(EntryList *owner, const Options *options,
     return 0;
 }
 
+static void list_directory(const char *path, const Options *options,
+    bool headings, bool *printed_section, bool *had_error, bool *output_failed)
+{
+    EntryList contents;
+    size_t i;
+
+    entry_list_init(&contents);
+    /* A failed read may leave valid entries: still sort and print them. */
+    if (entry_list_read_directory(&contents, path, options, stderr) != 0)
+        *had_error = true;
+    entry_list_sort(&contents, options);
+    if (*printed_section && fputc('\n', stdout) == EOF)
+        *output_failed = true;
+    if (headings && fprintf(stdout, "%s:\n", path) < 0)
+        *output_failed = true;
+    if (format_listing(stdout, &contents, options, true) != 0)
+        *output_failed = true;
+    *printed_section = true;
+
+    if (options->recursive) {
+        for (i = 0; i < contents.length; ++i) {
+            const Entry *child = &contents.items[i];
+
+            /* Child metadata comes from lstat: never follow symlinks, and
+             * never revisit the parent/self entries exposed by -a. */
+            if (!child->metadata_valid || !S_ISDIR(child->st.st_mode) ||
+                strcmp(child->name, ".") == 0 ||
+                strcmp(child->name, "..") == 0)
+                continue;
+            list_directory(child->path, options, headings, printed_section,
+                had_error, output_failed);
+        }
+    }
+    /* Keep the parent's owned paths alive throughout all child visits. */
+    entry_list_destroy(&contents);
+}
+
 int main(int argc, char *argv[])
 {
     Options options;
     EntryList operands, files, directories;
-    int operand_index, index, status = 0;
+    int operand_index, index;
     size_t i;
     bool headings, printed_section = false, output_failed = false;
+    bool had_error = false;
 
     (void)setlocale(LC_ALL, "");
     options_init(&options, isatty(STDOUT_FILENO) != 0, geteuid(),
@@ -79,16 +116,16 @@ int main(int argc, char *argv[])
     if (options_parse(&options, argc, argv, &operand_index, stderr) != 0)
         return EXIT_FAILURE;
 
-    headings = argc - operand_index > 1;
+    headings = options.recursive || argc - operand_index > 1;
     entry_list_init(&operands);
     if (operand_index == argc) {
         if (entry_list_add_path(&operands, ".", ".", 0, true, stderr) != 0)
-            status = EXIT_FAILURE;
+            had_error = true;
     } else {
         for (index = operand_index; index < argc; ++index) {
             if (entry_list_add_path(&operands, argv[index], argv[index],
                     0, true, stderr) != 0)
-                status = EXIT_FAILURE;
+                had_error = true;
         }
     }
     if (group_operands(&operands, &options, &files, &directories) != 0) {
@@ -105,22 +142,8 @@ int main(int argc, char *argv[])
     }
 
     for (i = 0; i < directories.length; ++i) {
-        EntryList contents;
-        const char *path = directories.items[i].path;
-
-        entry_list_init(&contents);
-        /* A failed read may leave valid entries: still sort and print them. */
-        if (entry_list_read_directory(&contents, path, &options, stderr) != 0)
-            status = EXIT_FAILURE;
-        entry_list_sort(&contents, &options);
-        if (printed_section && fputc('\n', stdout) == EOF)
-            output_failed = true;
-        if (headings && fprintf(stdout, "%s:\n", path) < 0)
-            output_failed = true;
-        if (format_listing(stdout, &contents, &options, true) != 0)
-            output_failed = true;
-        printed_section = true;
-        entry_list_destroy(&contents);
+        list_directory(directories.items[i].path, &options, headings,
+            &printed_section, &had_error, &output_failed);
     }
 
     entry_list_destroy(&operands);
@@ -128,7 +151,7 @@ int main(int argc, char *argv[])
         output_failed = true;
     if (output_failed) {
         fputs("my_ls: standard output: write error\n", stderr);
-        status = EXIT_FAILURE;
+        had_error = true;
     }
-    return status;
+    return had_error ? EXIT_FAILURE : EXIT_SUCCESS;
 }

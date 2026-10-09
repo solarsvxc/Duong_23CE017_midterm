@@ -202,7 +202,7 @@ alpha
 }
 
 # Break caught: suppressing default traversal of a directory symlink operand.
-directory_symlink_operand()
+symlink_directory_default()
 {
     mkdir target
     touch target/child
@@ -211,9 +211,20 @@ directory_symlink_operand()
     expect_success
     expect_output 'child
 '
+    run_listing -F linked
+    expect_success
+    expect_output 'child
+'
+    rm target/child
+    for flags in '-l' '-n' '-lF' '-nF'; do
+        run_listing "$flags" linked
+        expect_success
+        expect_output 'total 0
+'
+    done
 }
 
-# Break caught: ignoring classification, following a directory link with -F,
+# Break caught: ignoring classification, suppressing operand traversal with -F,
 # or treating execute bits on a directory/FIFO/link as a regular-file marker.
 # Sockets and platform whiteouts are covered by synthetic formatter entries.
 classify_fixture()
@@ -237,11 +248,195 @@ plain
 '
     run_listing -F linked
     expect_success
-    expect_output 'linked@
-'
+    expect_output ''
     run_listing -dF dir
     expect_success
     expect_output 'dir/
+'
+}
+
+# Break caught: opening a -d operand or printing directory section headers.
+d_lists_directory_operand()
+{
+    mkdir beta alpha
+    touch alpha/inside sample
+    run_listing -d beta sample alpha
+    expect_success
+    expect_output 'alpha
+beta
+sample
+'
+    run_listing -d
+    expect_success
+    expect_output '.
+'
+}
+
+# Break caught: replacing -d symlink metadata with the directory target.
+d_does_not_dereference_symlink()
+{
+    mkdir target
+    touch target/child
+    ln -s target linked
+    touch -h -t 202601020304.00 linked
+    run_listing -dF linked
+    expect_success
+    expect_output 'linked@
+'
+    run_listing -dn linked
+    expect_success
+    expect_output "lrwxrwxrwx 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked -> target
+"
+}
+
+# Break caught: breadth-first traversal, omitted/duplicate directories,
+# missing single-operand headings, or recursing before the parent listing.
+recursive_depth_first_sections()
+{
+    mkdir -p tree/alpha/deep tree/beta
+    touch tree/rootfile tree/alpha/afile tree/alpha/deep/leaf tree/beta/bfile
+    run_listing -R tree
+    expect_success
+    expect_output 'tree:
+alpha
+beta
+rootfile
+
+tree/alpha:
+afile
+deep
+
+tree/alpha/deep:
+leaf
+
+tree/beta:
+bfile
+'
+    run_listing -Rr tree
+    expect_success
+    expect_output 'tree:
+rootfile
+beta
+alpha
+
+tree/beta:
+bfile
+
+tree/alpha:
+deep
+afile
+
+tree/alpha/deep:
+leaf
+'
+}
+
+# Break caught: recursing into visible '.'/'..' entries or skipping hidden
+# real children when -a makes them visible.
+recursive_never_visits_dot_entries()
+{
+    mkdir -p tree/.hidden tree/child
+    run_listing -aR tree
+    expect_success
+    expect_output 'tree:
+.
+..
+.hidden
+child
+
+tree/.hidden:
+.
+..
+
+tree/child:
+.
+..
+'
+}
+
+# Break caught: following a child symlink instead of its own lstat type;
+# command-line links must still traverse the same real tree.
+recursive_does_not_follow_child_symlink()
+{
+    mkdir -p tree/child outside
+    touch outside/external tree/child/leaf
+    ln -s ../outside tree/linked
+    ln -s tree operand
+    run_listing -RF operand
+    expect_success
+    expect_output 'operand:
+child/
+linked@
+
+operand/child:
+leaf
+'
+}
+
+# Break caught: following a child link back to an ancestor and visiting it
+# repeatedly instead of listing the link exactly once.
+symlink_cycle_not_followed()
+{
+    mkdir -p tree/child
+    ln -s .. tree/child/up
+    run_listing -R tree
+    expect_success
+    expect_output 'tree:
+child
+
+tree/child:
+up
+'
+}
+
+# Break caught: first-wins or clustered-only -R/-d option handling.
+R_d_rightmost()
+{
+    mkdir -p tree/child
+    for flags in '-Rd' '-R -d'; do
+        # Intentional splitting checks both clustered and separate options.
+        run_listing $flags tree
+        expect_success
+        expect_output 'tree
+'
+    done
+    for flags in '-dR' '-d -R'; do
+        run_listing $flags tree
+        expect_success
+        expect_output 'tree:
+child
+
+tree/child:
+'
+    done
+}
+
+# Break caught: abandoning siblings/remaining operands after opendir fails,
+# discarding the failure status, or emitting directory errors on stdout.
+unreadable_child_continues_when_not_root()
+{
+    if [ "$(id -u)" -eq 0 ]; then
+        printf 'SKIP unreadable child: root bypasses directory permissions\n'
+        return
+    fi
+    mkdir -p tree/alpha tree/zeta zzlater
+    touch tree/alpha/hidden tree/zeta/leaf zzlater/last
+    chmod 000 tree/alpha
+    run_listing -R tree zzlater
+    chmod 700 tree/alpha
+    [ "$status" -ne 0 ]
+    grep -F 'tree/alpha' "$case_root/stderr" >/dev/null
+    expect_output 'tree:
+alpha
+zeta
+
+tree/alpha:
+
+tree/zeta:
+leaf
+
+zzlater:
+last
 '
 }
 
@@ -534,7 +729,11 @@ run_case()
 for case_name in no_operands single_file_operand mixed_files_before_directory \
     multiple_operand_heading empty_directory hidden_modes \
     operand_after_double_dash unknown_option missing_operand_continues \
-    reverse_groups directory_as_file_unsorted directory_symlink_operand \
+    reverse_groups directory_as_file_unsorted symlink_directory_default \
+    d_lists_directory_operand d_does_not_dereference_symlink \
+    recursive_depth_first_sections recursive_never_visits_dot_entries \
+    recursive_does_not_follow_child_symlink symlink_cycle_not_followed \
+    R_d_rightmost unreadable_child_continues_when_not_root \
     classify_fixture q_replaces_control_byte w_preserves_control_byte \
     terminal_default_is_unit_tested q_w_rightmost numeric_long_fields \
     named_long_fields long_symlink_arrow long_timestamp_mtime \
