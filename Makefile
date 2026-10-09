@@ -33,15 +33,19 @@ tests/test_entry: tests/test_entry.c src/entry.c src/entry.o src/options.o inclu
 tests/test_sort: tests/test_sort.c src/sort.o include/sort.h include/entry.h include/options.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_sort.c src/sort.o $(LDLIBS)
 
-unit-test: tests/test_options tests/test_entry tests/test_sort
+tests/test_format: tests/test_format.c src/format.o src/options.o include/format.h include/entry.h include/options.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_format.c src/format.o src/options.o $(LDLIBS)
+
+unit-test: tests/test_options tests/test_entry tests/test_sort tests/test_format
 	./tests/test_options
 	./tests/test_entry
 	./tests/test_sort
+	./tests/test_format
 
 test: unit-test my_ls
 	sh tests/test_ls.sh ./my_ls
 
 clean:
-	rm -f my_ls $(OBJECTS) tests/test_options tests/test_entry tests/test_sort
+	rm -f my_ls $(OBJECTS) tests/test_options tests/test_entry tests/test_sort tests/test_format
 
 .PHONY: all test unit-test clean

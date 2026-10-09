@@ -212,6 +212,98 @@ directory_symlink_operand()
 '
 }
 
+# Break caught: ignoring classification, following a directory link with -F,
+# or treating execute bits on a directory/FIFO/link as a regular-file marker.
+# Sockets and platform whiteouts are covered by synthetic formatter entries.
+classify_fixture()
+{
+    mkdir dir
+    touch plain executable
+    chmod 0644 plain
+    chmod 0755 executable
+    ln -s dir linked
+    ln -s absent dangling
+    mkfifo pipe
+    chmod 0755 pipe
+    run_listing -F
+    expect_success
+    expect_output 'dangling@
+dir/
+executable*
+linked@
+pipe|
+plain
+'
+    run_listing -F linked
+    expect_success
+    expect_output 'linked@
+'
+    run_listing -dF dir
+    expect_success
+    expect_output 'dir/
+'
+}
+
+expect_hex()
+{
+    actual_hex=$(od -An -tx1 "$case_root/stdout" | tr -d ' \n')
+    if [ "$actual_hex" != "$1" ]; then
+        printf 'unexpected output bytes in %s: %s\n' \
+            "$case_name" "$actual_hex" >&2
+        exit 1
+    fi
+}
+
+# Break caught: ignoring -q or converting the stored operand before lookup.
+q_replaces_control_byte()
+{
+    name=$(printf 'a\001b')
+    touch "$name"
+    run_listing -q "$name"
+    expect_success
+    expect_hex '613f620a'
+}
+
+# Break caught: sanitizing explicit raw output or changing the input path.
+w_preserves_control_byte()
+{
+    name=$(printf 'a\001b')
+    touch "$name"
+    run_listing -w "$name"
+    expect_success
+    expect_hex '6101620a'
+}
+
+# TTY=true is exercised by the formatter unit suite; this CLI checks the
+# actual redirected stdout default without depending on a pseudo-terminal.
+terminal_default_is_unit_tested()
+{
+    name=$(printf 'a\001b')
+    touch "$name"
+    run_listing "$name"
+    expect_success
+    expect_hex '6101620a'
+}
+
+# Break caught: first-wins handling of either clustered or separate -q/-w.
+q_w_rightmost()
+{
+    name=$(printf 'a\001b')
+    touch "$name"
+    run_listing -qw "$name"
+    expect_success
+    expect_hex '6101620a'
+    run_listing -wq "$name"
+    expect_success
+    expect_hex '613f620a'
+    run_listing -q -w "$name"
+    expect_success
+    expect_hex '6101620a'
+    run_listing -w -q "$name"
+    expect_success
+    expect_hex '613f620a'
+}
+
 run_case()
 (
     case_name=$1
@@ -228,7 +320,9 @@ run_case()
 for case_name in no_operands single_file_operand mixed_files_before_directory \
     multiple_operand_heading empty_directory hidden_modes \
     operand_after_double_dash unknown_option missing_operand_continues \
-    reverse_groups directory_as_file_unsorted directory_symlink_operand
+    reverse_groups directory_as_file_unsorted directory_symlink_operand \
+    classify_fixture q_replaces_control_byte w_preserves_control_byte \
+    terminal_default_is_unit_tested q_w_rightmost
 do
     run_case "$case_name"
 done
