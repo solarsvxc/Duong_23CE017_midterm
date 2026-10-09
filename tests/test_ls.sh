@@ -3,7 +3,8 @@
 set -eu
 LC_ALL=C
 TZ=UTC
-export LC_ALL TZ
+BLOCKSIZE=512
+export LC_ALL TZ BLOCKSIZE
 
 binary_input=${1:-./my_ls}
 binary=$(cd "$(dirname "$binary_input")" && pwd)/$(basename "$binary_input")
@@ -713,12 +714,310 @@ large_sparse_file()
 "
 }
 
+# Break caught: an accepted option that has no effect at its public consumer.
+# Reuse behavioral fixtures in isolated directories, rather than smoke-testing
+# a successful parse. Every synopsis letter has an explicit fixture below.
+every_option_is_accepted()
+{
+    for option in A a c d F f h i k l n q R r S s t u w; do
+        (
+            mkdir "option_$option"
+            cd "option_$option"
+            case "$option" in
+                A|a) hidden_modes ;;
+                c|u) time_cli_mtime_ctime_atime ;;
+                d) d_lists_directory_operand ;;
+                F) classify_fixture ;;
+                f|r|S|t) sort_cli_name_size_time_reverse_none ;;
+                h) h_overrides_k ;;
+                i) inode_prefix ;;
+                k|s) blocksize_512_and_1k ;;
+                l) named_long_fields ;;
+                n) numeric_long_fields ;;
+                q) q_replaces_control_byte ;;
+                R) recursive_depth_first_sections ;;
+                w) w_preserves_control_byte ;;
+            esac
+        )
+    done
+}
+
+# Break caught: losing hidden visibility, inode fields, named long format,
+# or classification when these options are used together.
+combined_AilF()
+{
+    mkdir listing
+    printf 'abc' > listing/.hidden
+    chmod 0755 listing/.hidden
+    touch -t 202601020304.00 listing/.hidden
+    inode=$(stat -f '%i' listing/.hidden)
+    blocks=$(stat -f '%b' listing/.hidden)
+    run_listing -AilF listing
+    expect_success
+    expect_output "total $blocks
+$inode -rwxr-xr-x 1 $(id -un) $(id -gn) 3 Jan  2 03:04 .hidden*
+"
+}
+
+# Break caught: numeric/human/prefix formatting discarding time sorting or
+# reverse order, or prefixing logical sizes instead of allocated bytes.
+combined_nhstr()
+{
+    truncate -s 1536 alpha
+    truncate -s 2048 beta
+    chmod 0644 alpha beta
+    touch -t 202601020304.00 alpha
+    touch -t 202602030405.00 beta
+    run_listing -nhstr beta alpha
+    expect_success
+    expect_output "0B -rw-r--r-- 1 $(id -u) $(id -g) 1.5K Jan  2 03:04 alpha
+0B -rw-r--r-- 1 $(id -u) $(id -g) 2.0K Feb  3 04:05 beta
+"
+}
+
+sort_fixture()
+{
+    truncate -s 3 alpha
+    truncate -s 1 beta
+    truncate -s 2 gamma
+    chmod 0644 alpha beta gamma
+    touch -m -t 202601020304.00 alpha
+    touch -m -t 202601030405.00 beta
+    touch -m -t 202601010203.00 gamma
+    touch -a -t 202602010203.00 alpha
+    touch -a -t 202602020304.00 beta
+    touch -a -t 202602030405.00 gamma
+}
+
+# Break caught: wrong primary key, reverse direction, or sorting SORT_NONE.
+# Explicit operands make unsorted order independent of readdir/filesystems.
+sort_cli_name_size_time_reverse_none()
+{
+    sort_fixture
+    for flags in '' '-S' '-t' '-r' '-Sr' '-tr' '-f' '-fr'; do
+        run_listing $flags gamma beta alpha
+        expect_success
+        case "$flags" in
+            '') expected=$(printf 'alpha\nbeta\ngamma') ;;
+            -S) expected=$(printf 'alpha\ngamma\nbeta') ;;
+            -t) expected=$(printf 'beta\nalpha\ngamma') ;;
+            -r) expected=$(printf 'gamma\nbeta\nalpha') ;;
+            -Sr) expected=$(printf 'beta\ngamma\nalpha') ;;
+            -tr) expected=$(printf 'gamma\nalpha\nbeta') ;;
+            -f|-fr) expected=$(printf 'gamma\nbeta\nalpha') ;;
+        esac
+        expect_output "$expected
+"
+    done
+    # The same keys must sort collected directory contents.
+    mkdir listing
+    mv alpha beta gamma listing/
+    for flags in '' '-S' '-t' '-r'; do
+        run_listing $flags listing
+        expect_success
+        case "$flags" in
+            '') expected=$(printf 'alpha\nbeta\ngamma') ;;
+            -S) expected=$(printf 'alpha\ngamma\nbeta') ;;
+            -t) expected=$(printf 'beta\nalpha\ngamma') ;;
+            -r) expected=$(printf 'gamma\nbeta\nalpha') ;;
+        esac
+        expect_output "$expected
+"
+    done
+}
+
+# Break caught: using mtime for every selected timestamp in sorting/output.
+# ctime cannot be set directly: separated chmod operations give a known order.
+time_cli_mtime_ctime_atime()
+{
+    sort_fixture
+    chmod 0600 beta
+    sleep 1
+    chmod 0600 alpha
+    sleep 1
+    chmod 0600 gamma
+    for flags in '-t' '-tc' '-tu'; do
+        run_listing "$flags" alpha gamma beta
+        expect_success
+        case "$flags" in
+            -t) expected=$(printf 'beta\nalpha\ngamma') ;;
+            -tc) expected=$(printf 'gamma\nalpha\nbeta') ;;
+            -tu) expected=$(printf 'gamma\nbeta\nalpha') ;;
+        esac
+        expect_output "$expected
+"
+    done
+    ctime=$(stat -f '%Sc' -t '%b %e %H:%M' alpha)
+    for flags in '-n' '-nc' '-nu'; do
+        run_listing "$flags" alpha
+        expect_success
+        case "$flags" in
+            -n) timestamp='Jan  2 03:04' ;;
+            -nc) timestamp=$ctime ;;
+            -nu) timestamp='Feb  1 02:03' ;;
+        esac
+        expect_output "-rw------- 1 $(id -u) $(id -g) 3 $timestamp alpha
+"
+    done
+}
+
+# Break caught: first-wins pair selection, or applying it only to clusters.
+# Existing cases assert both directions of all five manual-defined pairs.
+# Add all six ordered primary-sort pairs, clustered and separate, here.
+all_rightmost_pairs_cli()
+{
+    for pair_case in l_n_rightmost c_u_rightmost R_d_rightmost \
+        h_overrides_k q_w_rightmost; do
+        (
+            mkdir "$pair_case"
+            cd "$pair_case"
+            "$pair_case"
+        )
+    done
+    sort_fixture
+    for flags in '-fS' '-f -S' '-Sf' '-S -f' '-ft' '-f -t' \
+        '-tf' '-t -f' '-St' '-S -t' '-tS' '-t -S'; do
+        run_listing $flags gamma beta alpha
+        expect_success
+        case "$flags" in
+            '-fS'|'-f -S'|'-tS'|'-t -S')
+                expected=$(printf 'alpha\ngamma\nbeta') ;;
+            '-ft'|'-f -t'|'-St'|'-S -t')
+                expected=$(printf 'beta\nalpha\ngamma') ;;
+            *) expected=$(printf 'gamma\nbeta\nalpha') ;;
+        esac
+        expect_output "$expected
+"
+    done
+    # h/k must also honor separate arguments in both directions.
+    for flags in '-n -k -h' '-n -h -k'; do
+        run_listing $flags alpha
+        expect_success
+        case "$flags" in
+            '-n -k -h') size=3B ;;
+            *) size=3 ;;
+        esac
+        expect_output "-rw-r--r-- 1 $(id -u) $(id -g) $size Jan  2 03:04 alpha
+"
+    done
+}
+
+# Break caught: headings based on surviving operands after a failed lookup.
+failed_operand_still_requires_heading()
+{
+    mkdir directory
+    touch directory/child
+    run_listing absent directory
+    [ "$status" -ne 0 ]
+    grep -F 'my_ls: absent:' "$case_root/stderr" >/dev/null
+    expect_output 'directory:
+child
+'
+}
+
+# Break caught: unstable partition reversing directory operands in -f mode.
+# Empty directories make the assertion independent of readdir order.
+unsorted_multi_directory_partition()
+{
+    mkdir zdir adir mdir
+    touch zfile afile
+    run_listing -f zdir zfile adir afile mdir
+    expect_success
+    expect_output 'zfile
+afile
+
+zdir:
+
+adir:
+
+mdir:
+'
+}
+
+# Break caught: swallowing errors or suppressing the remaining valid output.
+error_exit_status()
+{
+    touch valid
+    run_listing valid
+    expect_success
+    expect_output 'valid
+'
+    run_listing absent valid
+    [ "$status" -ne 0 ]
+    expect_output 'valid
+'
+    grep -F 'my_ls: absent:' "$case_root/stderr" >/dev/null
+    run_listing absent
+    [ "$status" -ne 0 ]
+    expect_output ''
+    grep -F 'my_ls: absent:' "$case_root/stderr" >/dev/null
+    run_listing -Z valid
+    [ "$status" -ne 0 ]
+    expect_output ''
+    grep -F 'illegal option -- Z' "$case_root/stderr" >/dev/null
+    grep -F 'usage:' "$case_root/stderr" >/dev/null
+}
+
+# Break caught: clean leaving build artifacts or a rebuild missing objects.
+# Build in a private source copy; never remove the running suite's binaries.
+clean_rebuild()
+{
+    project_root=$(dirname "$binary")
+    rebuild_root="$case_root/rebuild"
+    mkdir "$rebuild_root"
+    cp "$project_root/Makefile" "$rebuild_root/"
+    cp -R "$project_root/include" "$project_root/src" \
+        "$project_root/tests" "$rebuild_root/"
+    (
+        cd "$rebuild_root"
+        touch src/cleanup_probe.o tests/cleanup_probe.o
+        "${MAKE:-make}" clean
+        for artifact in my_ls src/main.o src/options.o src/entry.o \
+            src/sort.o src/format.o tests/test_options tests/test_entry \
+            tests/test_sort tests/test_format; do
+            [ ! -e "$artifact" ]
+        done
+        [ -z "$(find src tests -name '*.o' -print)" ]
+        "${MAKE:-make}" all unit-test
+        [ -x my_ls ]
+        for object in src/main.o src/options.o src/entry.o src/sort.o \
+            src/format.o; do
+            [ -f "$object" ]
+        done
+        # Check rebuilt CLI behavior without recursively invoking make test.
+        mkdir fixture
+        touch fixture/zeta fixture/alpha
+        ./my_ls fixture >"$case_root/rebuilt_stdout" \
+            2>"$case_root/rebuilt_stderr"
+        printf 'alpha\nzeta\n' >"$case_root/rebuilt_expected"
+        cmp -s "$case_root/rebuilt_expected" "$case_root/rebuilt_stdout"
+        [ ! -s "$case_root/rebuilt_stderr" ]
+        "${MAKE:-make}" clean
+        for artifact in my_ls src/main.o src/options.o src/entry.o \
+            src/sort.o src/format.o tests/test_options tests/test_entry \
+            tests/test_sort tests/test_format; do
+            [ ! -e "$artifact" ]
+        done
+        [ -z "$(find src tests -name '*.o' -print)" ]
+    )
+}
+
+cleanup_case()
+{
+    # Restore search permission even if an unreadable fixture aborts early.
+    if [ -d "$case_root/data/tree/alpha" ]; then
+        chmod 700 "$case_root/data/tree/alpha" || :
+    fi
+    cd /
+    rm -rf "$case_root"
+}
+
 run_case()
 (
     case_name=$1
     case_root=$(mktemp -d "${TMPDIR:-/tmp}/my_ls_cli.XXXXXX")
     case_root=$(cd "$case_root" && pwd)
-    trap 'cd /; rm -rf "$case_root"' 0
+    trap 'cleanup_case' 0
     trap 'exit 1' HUP INT TERM
     mkdir "$case_root/data"
     cd "$case_root/data"
@@ -740,7 +1039,10 @@ for case_name in no_operands single_file_operand mixed_files_before_directory \
     c_u_rightmost l_n_rightmost inode_prefix blocksize_512_and_1k \
     h_overrides_k k_does_not_change_long_size long_total_even_empty \
     s_total_only_for_tty_via_formatter device_major_minor_when_available \
-    large_sparse_file
+    large_sparse_file every_option_is_accepted combined_AilF combined_nhstr \
+    sort_cli_name_size_time_reverse_none time_cli_mtime_ctime_atime \
+    all_rightmost_pairs_cli failed_operand_still_requires_heading \
+    unsorted_multi_directory_partition error_exit_status clean_rebuild
 do
     run_case "$case_name"
 done

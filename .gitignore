@@ -1,0 +1,11 @@
+my_ls
+*.o
+tests/*.o
+tests/test_options
+tests/test_entry
+tests/test_sort
+tests/test_format
+core
+core.*
+tmp/
+.superpowers/
