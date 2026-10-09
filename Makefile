@@ -14,11 +14,15 @@ my_ls: $(OBJECTS)
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+src/main.o: src/main.c include/entry.h include/format.h include/options.h include/sort.h
+
 src/options.o: src/options.c include/options.h
 
 src/entry.o: src/entry.c include/entry.h include/options.h
 
 src/sort.o: src/sort.c include/sort.h include/entry.h include/options.h
+
+src/format.o: src/format.c include/format.h include/entry.h include/options.h
 
 tests/test_options: tests/test_options.c src/options.o include/options.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ tests/test_options.c src/options.o $(LDLIBS)
@@ -34,7 +38,8 @@ unit-test: tests/test_options tests/test_entry tests/test_sort
 	./tests/test_entry
 	./tests/test_sort
 
-test: unit-test
+test: unit-test my_ls
+	sh tests/test_ls.sh ./my_ls
 
 clean:
 	rm -f my_ls $(OBJECTS) tests/test_options tests/test_entry tests/test_sort
