@@ -193,8 +193,8 @@ static int long_fields(const Entry *entry, const Options *options,
     }
     if (S_ISBLK(entry->st.st_mode) || S_ISCHR(entry->st.st_mode))
         count = snprintf(fields->size, sizeof(fields->size), "%ju, %ju",
-            (uintmax_t)major(entry->st.st_rdev),
-            (uintmax_t)minor(entry->st.st_rdev));
+            (uintmax_t)(unsigned int)major(entry->st.st_rdev),
+            (uintmax_t)(unsigned int)minor(entry->st.st_rdev));
     else
         count = snprintf(fields->size, sizeof(fields->size), "%jd",
             (intmax_t)entry->st.st_size);

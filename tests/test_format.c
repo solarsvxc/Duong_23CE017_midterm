@@ -339,6 +339,21 @@ static void device_size_columns(void)
         "-rw-r--r-- 1 0 0       5 Jan  2 03:04 file\n");
 }
 
+/* FreeBSD major/minor return signed int: widening directly would turn a
+ * high-bit component into a huge uintmax_t rather than its unsigned ID. */
+static void high_bit_device_components(void)
+{
+    Entry entry = {.name = "device", .metadata_valid = true,
+        .st = {.st_mode = S_IFCHR | 0600, .st_nlink = 1,
+            .st_mtim = {.tv_sec = 97440}}};
+    EntryList list = {&entry, 1, 1};
+    Options options = {.long_format = true, .numeric_ids = true,
+        .name_mode = NAME_RAW};
+    entry.st.st_rdev = makedev(0x80000000U, 0xffffffffU);
+    expect_listing(&list, &options,
+        "crw------- 1 0 0 2147483648, 4294967295 Jan  2 03:04 device\n");
+}
+
 /* The long path must propagate write failures and permit empty operands
  * without allocating rows or emitting task-7 directory totals early. */
 static void long_empty_and_output_error(void)
@@ -372,6 +387,7 @@ int main(void)
         {"long_symlink_preserves_target", long_symlink_preserves_target},
         {"named_ids_and_fallback", named_ids_and_fallback},
         {"device_size_columns", device_size_columns},
+        {"high_bit_device_components", high_bit_device_components},
         {"long_empty_and_output_error", long_empty_and_output_error}
     };
     size_t i;
@@ -382,6 +398,6 @@ int main(void)
         tests[i].run();
         printf("PASS %s\n", tests[i].name);
     }
-    puts("All 13 formatter tests passed.");
+    puts("All 14 formatter tests passed.");
     return 0;
 }
