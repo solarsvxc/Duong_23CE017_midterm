@@ -123,7 +123,118 @@ void format_mode(mode_t mode, unsigned char dirent_type, char out[11])
 /* A binary digit bound also bounds decimal text, plus sign and NUL. */
 #define NUMBER_TEXT_SIZE (sizeof(uintmax_t) * CHAR_BIT + 2)
 
+/* A list has at most SIZE_MAX entries, each with at most UINTMAX_MAX blocks.
+ * Two limbs retain their exact sum even when its final conversion fits only
+ * because the selected display unit is large. */
+typedef struct { uintmax_t high; uintmax_t low; } BlockSum;
+
+static void add_blocks(BlockSum *sum, blkcnt_t blocks)
+{
+    uintmax_t previous = sum->low;
+    if (blocks <= 0)
+        return;
+    sum->low += (uintmax_t)blocks;
+    if (sum->low < previous)
+        ++sum->high;
+}
+
+/* Append a numerator bit to binary long division without overflowing 2*r.
+ * r < unit; comparing against unit-r gives the next quotient bit safely. */
+static int divide_bit(uintmax_t bit, uintmax_t unit, uintmax_t *quotient,
+    uintmax_t *remainder)
+{
+    uintmax_t digit = 0;
+    if (*remainder >= unit - *remainder) {
+        *remainder -= unit - *remainder;
+        digit = 1;
+    } else
+        *remainder += *remainder;
+    if (bit != 0) {
+        if (*remainder == unit - 1) {
+            *remainder = 0;
+            digit = 1;
+        } else
+            ++*remainder;
+    }
+    if (*quotient > (UINTMAX_MAX - digit) / 2)
+        return -1;
+    *quotient = *quotient * 2 + digit;
+    return 0;
+}
+
+static uintmax_t block_sum_units(BlockSum sum, uint64_t unit_bytes)
+{
+    uintmax_t unit = unit_bytes == 0 ? 512 : (uintmax_t)unit_bytes;
+    uintmax_t quotient = 0, remainder = 0;
+    uintmax_t words[] = {sum.high, sum.low};
+    size_t word, bit;
+    for (word = 0; word < 2; ++word) {
+        for (bit = sizeof(uintmax_t) * CHAR_BIT; bit != 0; --bit) {
+            if (divide_bit((words[word] >> (bit - 1)) & 1, unit,
+                &quotient, &remainder) != 0)
+                return UINTMAX_MAX;
+        }
+    }
+    /* Native blocks represent 512 bytes: append nine zero bits instead of
+     * multiplying the raw sum, which could require a third limb. */
+    for (bit = 0; bit < 9; ++bit) {
+        if (divide_bit(0, unit, &quotient, &remainder) != 0)
+            return UINTMAX_MAX;
+    }
+    if (remainder != 0 && quotient != UINTMAX_MAX)
+        ++quotient;
+    return quotient;
+}
+
+uintmax_t format_block_units(blkcnt_t blocks_512, uint64_t unit_bytes)
+{
+    BlockSum sum = {0};
+    add_blocks(&sum, blocks_512);
+    return block_sum_units(sum, unit_bytes);
+}
+
+int format_human_size(uintmax_t bytes, char *buffer, size_t size)
+{
+    static const char units[] = {'B', 'K', 'M', 'G', 'T', 'P'};
+    uintmax_t scale = 1, whole, remainder, tenths;
+    size_t unit = 0;
+    int count;
+    while (unit < sizeof(units) - 1 && bytes / scale >= 1024) {
+        scale *= 1024;
+        ++unit;
+    }
+    whole = bytes / scale;
+    remainder = bytes % scale;
+    if (unit == 0)
+        count = snprintf(buffer, size, "%juB", bytes);
+    else if (whole < 10) {
+        tenths = whole * 10 + (remainder * 10 + scale / 2) / scale;
+        count = snprintf(buffer, size, "%ju.%ju%c", tenths / 10,
+            tenths % 10, units[unit]);
+    } else {
+        if (remainder >= scale / 2)
+            ++whole;
+        if (whole == 1024 && unit < sizeof(units) - 1)
+            count = snprintf(buffer, size, "1.0%c", units[unit + 1]);
+        else
+            count = snprintf(buffer, size, "%ju%c", whole, units[unit]);
+    }
+    if (count < 0 || (size_t)count >= size) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return 0;
+}
+
 typedef struct {
+    char inode[NUMBER_TEXT_SIZE];
+    char blocks[NUMBER_TEXT_SIZE];
+} PrefixFields;
+
+typedef struct { size_t inode; size_t blocks; } PrefixWidths;
+
+typedef struct {
+    PrefixFields prefix;
     char links[NUMBER_TEXT_SIZE];
     char size[2 * NUMBER_TEXT_SIZE + 2];
     char timestamp[128];
@@ -132,6 +243,7 @@ typedef struct {
 } LongFields;
 
 typedef struct {
+    PrefixWidths prefix;
     size_t links;
     size_t owner;
     size_t group;
@@ -195,7 +307,13 @@ static int long_fields(const Entry *entry, const Options *options,
         count = snprintf(fields->size, sizeof(fields->size), "%ju, %ju",
             (uintmax_t)(unsigned int)major(entry->st.st_rdev),
             (uintmax_t)(unsigned int)minor(entry->st.st_rdev));
-    else
+    else if (options->size_mode == SIZE_HUMAN) {
+        if (format_human_size(entry->st.st_size <= 0 ? 0 :
+            (uintmax_t)entry->st.st_size, fields->size,
+            sizeof(fields->size)) != 0)
+            return -1;
+        count = (int)strlen(fields->size);
+    } else
         count = snprintf(fields->size, sizeof(fields->size), "%jd",
             (intmax_t)entry->st.st_size);
     if (count < 0 || (size_t)count >= sizeof(fields->size)) {
@@ -243,6 +361,64 @@ static int column(FILE *out, const char *text, size_t width, bool right)
     return fputc(' ', out) == EOF ? -1 : 0;
 }
 
+static int block_text(BlockSum sum, const Options *options,
+    char *buffer, size_t size)
+{
+    uint64_t unit = options->size_mode == SIZE_KIB ? 1024 : options->block_size;
+    int count;
+    if (options->size_mode == SIZE_HUMAN)
+        return format_human_size(block_sum_units(sum, 1), buffer, size);
+    count = snprintf(buffer, size, "%ju", block_sum_units(sum, unit));
+    if (count < 0 || (size_t)count >= size) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    return 0;
+}
+
+static int prefix_fields(const Entry *entry, const Options *options,
+    PrefixFields *fields)
+{
+    int count;
+    if (options->show_inode) {
+        count = snprintf(fields->inode, sizeof(fields->inode), "%ju",
+            (uintmax_t)entry->st.st_ino);
+        if (count < 0 || (size_t)count >= sizeof(fields->inode)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+    }
+    if (options->show_blocks) {
+        BlockSum sum = {0};
+        add_blocks(&sum, entry->st.st_blocks);
+        if (block_text(sum, options, fields->blocks,
+            sizeof(fields->blocks)) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+static void measure_prefix(PrefixWidths *widths, const PrefixFields *fields,
+    const Options *options)
+{
+    if (options->show_inode)
+        measure_width(&widths->inode, fields->inode);
+    if (options->show_blocks)
+        measure_width(&widths->blocks, fields->blocks);
+}
+
+static int print_prefix(FILE *out, const PrefixFields *fields,
+    const PrefixWidths *widths, const Options *options)
+{
+    if (options->show_inode &&
+        column(out, fields->inode, widths->inode, true) != 0)
+        return -1;
+    if (options->show_blocks &&
+        column(out, fields->blocks, widths->blocks, true) != 0)
+        return -1;
+    return 0;
+}
+
 static int long_listing(FILE *out, const EntryList *list,
     const Options *options)
 {
@@ -262,8 +438,10 @@ static int long_listing(FILE *out, const EntryList *list,
     if (fields == NULL)
         return -1;
     for (i = 0; i < list->length; ++i) {
-        if (long_fields(&list->items[i], options, &fields[i]) != 0)
+        if (prefix_fields(&list->items[i], options, &fields[i].prefix) != 0 ||
+            long_fields(&list->items[i], options, &fields[i]) != 0)
             goto cleanup;
+        measure_prefix(&widths.prefix, &fields[i].prefix, options);
         measure_width(&widths.links, fields[i].links);
         measure_width(&widths.owner, fields[i].owner);
         measure_width(&widths.group, fields[i].group);
@@ -280,7 +458,9 @@ static int long_listing(FILE *out, const EntryList *list,
         if (name == NULL)
             goto cleanup;
         format_mode(entry->st.st_mode, entry->dirent_type, mode);
-        written = fprintf(out, "%s ", mode);
+        written = print_prefix(out, &fields[i].prefix, &widths.prefix, options);
+        if (written == 0)
+            written = fprintf(out, "%s ", mode);
         if (written >= 0 &&
             (column(out, fields[i].links, widths.links, true) != 0 ||
             column(out, fields[i].owner, widths.owner, false) != 0 ||
@@ -318,12 +498,28 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
     bool directory_contents)
 {
     size_t i;
+    PrefixWidths widths = {0};
 
-    /* Later formatting tasks will use this to select directory totals. */
-    (void)directory_contents;
+    if (directory_contents && (options->long_format ||
+        (options->show_blocks && options->stdout_is_tty))) {
+        BlockSum sum = {0};
+        char total[NUMBER_TEXT_SIZE];
+        for (i = 0; i < list->length; ++i)
+            add_blocks(&sum, list->items[i].st.st_blocks);
+        if (block_text(sum, options, total, sizeof(total)) != 0 ||
+            fprintf(out, "total %s\n", total) < 0)
+            return -1;
+    }
     if (options->long_format)
         return long_listing(out, list, options);
     for (i = 0; i < list->length; ++i) {
+        PrefixFields fields;
+        if (prefix_fields(&list->items[i], options, &fields) != 0)
+            return -1;
+        measure_prefix(&widths, &fields, options);
+    }
+    for (i = 0; i < list->length; ++i) {
+        PrefixFields fields;
         char *name = format_display_name(list->items[i].name,
             options->name_mode);
         char suffix = options->classify ?
@@ -332,8 +528,12 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
 
         if (name == NULL)
             return -1;
-        result = suffix == '\0' ? fprintf(out, "%s\n", name) :
-            fprintf(out, "%s%c\n", name, suffix);
+        result = prefix_fields(&list->items[i], options, &fields);
+        if (result == 0)
+            result = print_prefix(out, &fields, &widths, options);
+        if (result == 0)
+            result = suffix == '\0' ? fprintf(out, "%s\n", name) :
+                fprintf(out, "%s%c\n", name, suffix);
         free(name);
         if (result < 0)
             return -1;

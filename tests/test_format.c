@@ -94,20 +94,26 @@ static void type_suffixes(void)
     }
 }
 
-static void expect_listing(const EntryList *list, const Options *options,
-    const char *expected)
+static void expect_listing_context(const EntryList *list, const Options *options,
+    bool directory_contents, const char *expected)
 {
     FILE *out = tmpfile();
     char buffer[2048];
     size_t length;
     assert(out != NULL);
-    assert(format_listing(out, list, options, true) == 0);
+    assert(format_listing(out, list, options, directory_contents) == 0);
     rewind(out);
     length = fread(buffer, 1, sizeof(buffer), out);
     assert(!ferror(out));
     assert(length == strlen(expected));
     assert(memcmp(buffer, expected, length) == 0);
     assert(fclose(out) == 0);
+}
+
+static void expect_listing(const EntryList *list, const Options *options,
+    const char *expected)
+{
+    expect_listing_context(list, options, false, expected);
 }
 
 /* Adding markers unconditionally, mutating filesystem strings, or ignoring
@@ -355,7 +361,7 @@ static void high_bit_device_components(void)
 }
 
 /* The long path must propagate write failures and permit empty operands
- * without allocating rows or emitting task-7 directory totals early. */
+ * without allocating rows or emitting a directory total. */
 static void long_empty_and_output_error(void)
 {
     Entry entry = {.name = "sample", .metadata_valid = true,
@@ -370,6 +376,170 @@ static void long_empty_and_output_error(void)
     assert(format_listing(out, &list, &options, false) == -1);
     assert(fclose(out) == 0);
     expect_listing(&empty, &options, "");
+}
+
+/* Multiplying first or truncating partial units corrupts these counts. */
+static void block_rounding_and_overflow(void)
+{
+    assert(format_block_units((blkcnt_t)-1, 512) == 0);
+    assert(format_block_units(0, 512) == 0);
+    assert(format_block_units(1, 512) == 1);
+    assert(format_block_units(1, 0) == 1);
+    assert(format_block_units(1, 1024) == 1);
+    assert(format_block_units(2, 1024) == 1);
+    assert(format_block_units(3, 1024) == 2);
+    assert(format_block_units(1, 1000) == 1);
+    assert(format_block_units(2, 1000) == 2);
+    assert(format_block_units(1, UINT64_MAX) == 1);
+    assert(format_block_units((blkcnt_t)INT64_MAX, 512) ==
+        UINT64_C(9223372036854775807));
+    assert(format_block_units((blkcnt_t)INT64_MAX, 1024) ==
+        UINT64_C(4611686018427387904));
+    assert(format_block_units((blkcnt_t)INT64_MAX, UINT64_MAX) == 256);
+    assert(format_block_units((blkcnt_t)INT64_MAX, 1000) ==
+        UINT64_C(4722366482869645214));
+    assert(format_block_units((blkcnt_t)INT64_MAX, 1) == UINTMAX_MAX);
+}
+
+/* Decimal units, missing suffixes, and truncation break exact strings. */
+static void human_sizes_and_small_buffers(void)
+{
+    static const struct { uintmax_t bytes; const char *want; } cases[] = {
+        {0, "0B"}, {1023, "1023B"}, {1024, "1.0K"}, {1536, "1.5K"},
+        {1048576, "1.0M"}, {1073741824, "1.0G"},
+        {UINT64_C(1099511627776), "1.0T"},
+        {UINT64_C(1125899906842624), "1.0P"}, {10240, "10K"},
+        {UINT64_MAX, "16384P"}
+    };
+    char buffer[32];
+    size_t i;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        assert(format_human_size(cases[i].bytes, buffer, sizeof(buffer)) == 0);
+        assert(strcmp(buffer, cases[i].want) == 0);
+    }
+    assert(format_human_size(1024, buffer, 4) == -1);
+    assert(format_human_size(0, buffer, 0) == -1);
+    assert(format_human_size(0, NULL, 0) == -1);
+}
+
+/* Prefix order and column widths apply equally to short and long rows. */
+static void inode_block_prefix_alignment(void)
+{
+    Entry entries[] = {
+        {.name = "first", .st = {.st_ino = 7, .st_blocks = 1,
+            .st_mode = S_IFREG | 0644, .st_nlink = 1, .st_size = 1024,
+            .st_mtim = {.tv_sec = 97440}}},
+        {.name = "second", .st = {.st_ino = 123, .st_blocks = 22,
+            .st_mode = S_IFREG | 0644, .st_nlink = 1, .st_size = 3,
+            .st_mtim = {.tv_sec = 97440}}}
+    };
+    EntryList list = {entries, 2, 2};
+    Options options = {.show_inode = true, .show_blocks = true,
+        .numeric_ids = true, .block_size = 512, .name_mode = NAME_RAW};
+    expect_listing(&list, &options, "  7  1 first\n123 22 second\n");
+    options.long_format = true;
+    options.size_mode = SIZE_KIB;
+    expect_listing(&list, &options,
+        "  7  1 -rw-r--r-- 1 0 0 1024 Jan  2 03:04 first\n"
+        "123 11 -rw-r--r-- 1 0 0    3 Jan  2 03:04 second\n");
+    options.size_mode = SIZE_HUMAN;
+    expect_listing(&list, &options,
+        "  7 512B -rw-r--r-- 1 0 0 1.0K Jan  2 03:04 first\n"
+        "123  11K -rw-r--r-- 1 0 0   3B Jan  2 03:04 second\n");
+}
+
+/* Rounding each row before summation incorrectly yields total 2. */
+static void directory_totals_round_once(void)
+{
+    Entry entries[] = {
+        {.name = "a", .st = {.st_blocks = 1}},
+        {.name = "b", .st = {.st_blocks = 1}},
+        {.name = "c", .st = {.st_blocks = -1}}
+    };
+    EntryList list = {entries, 3, 3};
+    EntryList empty = {0};
+    Options options = {.show_blocks = true, .stdout_is_tty = true,
+        .size_mode = SIZE_KIB, .name_mode = NAME_RAW};
+    expect_listing_context(&list, &options, true,
+        "total 1\n1 a\n1 b\n0 c\n");
+    options.size_mode = SIZE_HUMAN;
+    expect_listing_context(&list, &options, true,
+        "total 1.0K\n512B a\n512B b\n  0B c\n");
+    options.long_format = true;
+    expect_listing_context(&empty, &options, true, "total 0B\n");
+    options.size_mode = SIZE_DEFAULT;
+    expect_listing_context(&empty, &options, true, "total 0\n");
+}
+
+/* Only -s directory output on a terminal receives the short total. */
+static void s_total_only_for_tty_via_formatter(void)
+{
+    Entry entry = {.name = "sample", .st = {.st_blocks = 1}};
+    EntryList list = {&entry, 1, 1};
+    Options options = {.show_blocks = true, .block_size = 512,
+        .name_mode = NAME_RAW};
+    expect_listing_context(&list, &options, true, "1 sample\n");
+    options.stdout_is_tty = true;
+    expect_listing_context(&list, &options, true, "total 1\n1 sample\n");
+    expect_listing_context(&list, &options, false, "1 sample\n");
+    options.show_blocks = false;
+    expect_listing_context(&list, &options, true, "sample\n");
+}
+
+/* Saturating the raw sum prematurely loses a representable final total. */
+static void large_totals_keep_raw_precision(void)
+{
+    Entry entries[] = {
+        {.name = "a", .st = {.st_blocks = (blkcnt_t)INT64_MAX}},
+        {.name = "b", .st = {.st_blocks = (blkcnt_t)INT64_MAX}},
+        {.name = "c", .st = {.st_blocks = (blkcnt_t)INT64_MAX}}
+    };
+    EntryList list = {entries, 3, 3};
+    Options options = {.show_blocks = true, .stdout_is_tty = true,
+        .block_size = UINT64_MAX, .name_mode = NAME_RAW};
+    expect_listing_context(&list, &options, true,
+        "total 768\n256 a\n256 b\n256 c\n");
+    options.block_size = 512;
+    expect_listing_context(&list, &options, true,
+        "total 18446744073709551615\n"
+        "9223372036854775807 a\n9223372036854775807 b\n"
+        "9223372036854775807 c\n");
+}
+
+/* Human mode must preserve devices, including reviewed high-bit IDs. */
+static void human_device_size_preserved(void)
+{
+    Entry entry = {.name = "device", .st = {.st_mode = S_IFCHR | 0600,
+        .st_nlink = 1, .st_size = 1536, .st_blocks = 2,
+        .st_mtim = {.tv_sec = 97440}}};
+    EntryList list = {&entry, 1, 1};
+    Options options = {.long_format = true, .numeric_ids = true,
+        .show_blocks = true, .size_mode = SIZE_HUMAN, .name_mode = NAME_RAW};
+    entry.st.st_rdev = makedev(0x80000000U, 0xffffffffU);
+    expect_listing(&list, &options,
+        "1.0K crw------- 1 0 0 2147483648, 4294967295 Jan  2 03:04 device\n");
+}
+
+/* Long directory totals are required even when stdout is redirected and
+ * -s is absent; operand lists must never acquire that total. */
+static void long_directory_total_without_s(void)
+{
+    Entry entry = {.name = "sample", .st = {.st_mode = S_IFREG | 0644,
+        .st_nlink = 1, .st_size = 1536, .st_blocks = 3,
+        .st_mtim = {.tv_sec = 97440}}};
+    EntryList list = {&entry, 1, 1};
+    Options options = {.long_format = true, .numeric_ids = true,
+        .block_size = 512, .name_mode = NAME_RAW};
+    expect_listing_context(&list, &options, true,
+        "total 3\n-rw-r--r-- 1 0 0 1536 Jan  2 03:04 sample\n");
+    options.size_mode = SIZE_KIB;
+    expect_listing_context(&list, &options, true,
+        "total 2\n-rw-r--r-- 1 0 0 1536 Jan  2 03:04 sample\n");
+    options.size_mode = SIZE_HUMAN;
+    expect_listing_context(&list, &options, true,
+        "total 1.5K\n-rw-r--r-- 1 0 0 1.5K Jan  2 03:04 sample\n");
+    expect_listing(&list, &options,
+        "-rw-r--r-- 1 0 0 1.5K Jan  2 03:04 sample\n");
 }
 
 int main(void)
@@ -388,7 +558,15 @@ int main(void)
         {"named_ids_and_fallback", named_ids_and_fallback},
         {"device_size_columns", device_size_columns},
         {"high_bit_device_components", high_bit_device_components},
-        {"long_empty_and_output_error", long_empty_and_output_error}
+        {"long_empty_and_output_error", long_empty_and_output_error},
+        {"block_rounding_and_overflow", block_rounding_and_overflow},
+        {"human_sizes_and_small_buffers", human_sizes_and_small_buffers},
+        {"inode_block_prefix_alignment", inode_block_prefix_alignment},
+        {"directory_totals_round_once", directory_totals_round_once},
+        {"s_total_only_for_tty_via_formatter", s_total_only_for_tty_via_formatter},
+        {"large_totals_keep_raw_precision", large_totals_keep_raw_precision},
+        {"human_device_size_preserved", human_device_size_preserved},
+        {"long_directory_total_without_s", long_directory_total_without_s}
     };
     size_t i;
     assert(setlocale(LC_ALL, "C") != NULL);
@@ -398,6 +576,6 @@ int main(void)
         tests[i].run();
         printf("PASS %s\n", tests[i].name);
     }
-    puts("All 14 formatter tests passed.");
+    puts("All 22 formatter tests passed.");
     return 0;
 }

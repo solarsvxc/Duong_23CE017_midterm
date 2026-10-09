@@ -397,6 +397,127 @@ l_n_rightmost()
     done
 }
 
+# Break caught: omitting the inode or printing it after the name.
+inode_prefix()
+{
+    touch sample
+    inode=$(stat -f '%i' sample)
+    run_listing -i sample
+    expect_success
+    expect_output "$inode sample
+"
+}
+
+# Native allocation is filesystem-dependent; stat supplies raw 512B blocks.
+# Break caught: ignoring BLOCKSIZE, not rounding, or letting it override -k.
+blocksize_512_and_1k()
+{
+    printf 'abc' > sample
+    blocks=$(stat -f '%b' sample)
+    BLOCKSIZE=512
+    export BLOCKSIZE
+    run_listing -s sample
+    expect_success
+    expect_output "$blocks sample
+"
+    BLOCKSIZE=1K
+    run_listing -s sample
+    expect_success
+    expect_output "$(((blocks + 1) / 2)) sample
+"
+    BLOCKSIZE=1M
+    run_listing -s sample
+    expect_success
+    expect_output "$(((blocks + 2047) / 2048)) sample
+"
+    run_listing -sk sample
+    expect_success
+    expect_output "$(((blocks + 1) / 2)) sample
+"
+}
+
+# Break caught: ignoring the rightmost size option or using BLOCKSIZE for -h.
+h_overrides_k()
+{
+    truncate -s 1536 sample
+    chmod 0644 sample
+    touch -t 202601020304.00 sample
+    BLOCKSIZE=1M
+    export BLOCKSIZE
+    run_listing -nkh sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 1.5K Jan  2 03:04 sample
+"
+    run_listing -nhk sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 1536 Jan  2 03:04 sample
+"
+    run_listing -skh sample
+    expect_success
+    expect_output '0B sample
+'
+}
+
+# Break caught: applying allocated block units to logical file size.
+k_does_not_change_long_size()
+{
+    long_fixture
+    run_listing -nk sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 3 Jan  2 03:04 sample
+"
+}
+
+# Break caught: suppressing totals when no entries exist or -s is absent.
+long_total_even_empty()
+{
+    mkdir empty
+    run_listing -n empty
+    expect_success
+    expect_output 'total 0
+'
+    run_listing -nh empty
+    expect_success
+    expect_output 'total 0B
+'
+}
+
+# Actual stdout is redirected here; the unit fixture exercises TTY=true.
+s_total_only_for_tty_via_formatter()
+{
+    mkdir sample
+    touch sample/child
+    run_listing -s sample
+    expect_success
+    expect_output '0 child
+'
+}
+
+# Break caught: human mode replacing device IDs with st_size.
+device_major_minor_when_available()
+{
+    if [ ! -c /dev/null ]; then
+        printf 'SKIP device fixture: /dev/null unavailable\n'
+        return
+    fi
+    run_listing -nh /dev/null
+    expect_success
+    grep -E '^c[^ ]* +[0-9]+ +[0-9]+ +[0-9]+ +[0-9]+, +[0-9]+ ' \
+        "$case_root/stdout" >/dev/null
+}
+
+# Break caught: narrowing st_size to 32 bits or converting it under -n.
+large_sparse_file()
+{
+    truncate -s 5368709120 sample
+    chmod 0644 sample
+    touch -t 202601020304.00 sample
+    run_listing -n sample
+    expect_success
+    expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 5368709120 Jan  2 03:04 sample
+"
+}
+
 run_case()
 (
     case_name=$1
@@ -417,7 +538,10 @@ for case_name in no_operands single_file_operand mixed_files_before_directory \
     classify_fixture q_replaces_control_byte w_preserves_control_byte \
     terminal_default_is_unit_tested q_w_rightmost numeric_long_fields \
     named_long_fields long_symlink_arrow long_timestamp_mtime \
-    c_u_rightmost l_n_rightmost
+    c_u_rightmost l_n_rightmost inode_prefix blocksize_512_and_1k \
+    h_overrides_k k_does_not_change_long_size long_total_even_empty \
+    s_total_only_for_tty_via_formatter device_major_minor_when_available \
+    large_sparse_file
 do
     run_case "$case_name"
 done
