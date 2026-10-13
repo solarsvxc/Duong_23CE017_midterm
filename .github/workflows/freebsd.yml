@@ -1,0 +1,28 @@
+name: FreeBSD build and tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test on FreeBSD 14
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          usesh: true
+          copyback: false
+          run: |
+            set -eu
+            freebsd-version
+            make clean
+            make
+            make test
+            make clean
