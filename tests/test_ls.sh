@@ -679,10 +679,18 @@ h_overrides_k()
     expect_success
     expect_output "-rw-r--r-- 1 $(id -u) $(id -g) 1536 Jan  2 03:04 sample
 "
+    # Filesystems may allocate blocks for a truncate-created file. Compare
+    # against -sh so this checks option precedence without assuming st_blocks.
+    run_listing -sh sample
+    expect_success
+    cp "$case_root/stdout" "$case_root/expected"
     run_listing -skh sample
     expect_success
-    expect_output '0B sample
-'
+    if ! cmp -s "$case_root/expected" "$case_root/stdout"; then
+        printf 'unexpected stdout in %s\n' "$case_name" >&2
+        diff -u "$case_root/expected" "$case_root/stdout" >&2 || :
+        exit 1
+    fi
 }
 
 # Break caught: applying allocated block units to logical file size.
