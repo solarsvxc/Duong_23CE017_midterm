@@ -175,12 +175,4 @@ passed the strict compiler build, five C test executables, the complete CLI
 suite, and cleanup on FreeBSD. Run the gate above on the target FreeBSD system
 as a final local check before submission.
 
-## Submission
 
-GitHub repository: [solarsvxc/Duong_23CE017_midterm](https://github.com/solarsvxc/Duong_23CE017_midterm).
-This README is the project report. The repository contains the source,
-headers, Makefile, tests, report, and ignore rules. Generated `my_ls`, object
-files, five test executables, cores, `tmp/`, and local agent scratch
-`.superpowers/` are ignored and are not submission artifacts. `make clean`
-removes the program, source/test objects, and test executables. Submit this
-report through the e-learning system by the assigned due date.
