@@ -81,7 +81,7 @@ characters. Raw output may contain control bytes, so use `-q` for inspection.
 Use a FreeBSD system with its base C compiler (`cc`), BSD `make`, `/bin/sh`,
 and standard utilities. The tests use FreeBSD `stat -f`, `touch -h`,
 `truncate`, `mkfifo`, `mktemp`, `id`, `cmp`, `diff`, `od`, `tr`, `grep`,
-`find`, `sleep`, and ordinary file/permission utilities. No third-party
+`sed`, `find`, `sleep`, and ordinary file/permission utilities. No third-party
 libraries are required. Git is needed to clone the repository, but not to build.
 Run as a normal user to exercise unreadable-directory checks; root skips
 those fixtures because it bypasses their permission restriction. A UTF-8
@@ -168,10 +168,12 @@ The manual's archive-state type markers have no fixture or implementation
 branch here; ordinary FreeBSD headers do not provide their mode constants.
 They remain a platform-specific limitation if such headers are introduced.
 
-The authoring host is Windows and has no available FreeBSD environment, C
-compiler, or `make`. The shell test script passed a syntax check with Git for
-Windows `sh`; no FreeBSD build or runtime test pass is claimed. Run the gate
-above on FreeBSD before claiming runtime acceptance or warning-free compilation.
+The authoring host is Windows. The project is also built and tested in a
+[FreeBSD 14 GitHub Actions workflow](https://github.com/solarsvxc/Duong_23CE017_midterm/actions/workflows/freebsd.yml).
+Its [verified run](https://github.com/solarsvxc/Duong_23CE017_midterm/actions/runs/38341640206)
+passed the strict compiler build, five C test executables, the complete CLI
+suite, and cleanup on FreeBSD. Run the gate above on the target FreeBSD system
+as a final local check before submission.
 
 ## Submission
 
