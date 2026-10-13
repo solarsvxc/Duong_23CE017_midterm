@@ -61,7 +61,7 @@ static void formatter_failure(size_t fail_after, bool long_format,
     bool directory, const char *affected_path)
 {
     char *files[] = {"my_ls", long_format ? "-n" : "-q",
-        "first", "second", "later", NULL};
+        "first", "second", "third", "later", NULL};
     char *directories[] = {"my_ls", "-qRf", "tree", "later", NULL};
     FILE *out = tmpfile(), *err = tmpfile();
     int saved_out = dup(STDOUT_FILENO), saved_err = dup(STDERR_FILENO);
@@ -73,7 +73,7 @@ static void formatter_failure(size_t fail_after, bool long_format,
     assert(dup2(fileno(out), STDOUT_FILENO) >= 0);
     assert(dup2(fileno(err), STDERR_FILENO) >= 0);
     format_fail_after = fail_after;
-    status = my_ls_main(directory ? 4 : 5,
+    status = my_ls_main(directory ? 4 : 6,
         directory ? directories : files);
     format_fail_after = SIZE_MAX;
     assert(fflush(stdout) == 0 && fflush(stderr) == 0);
@@ -88,6 +88,12 @@ static void formatter_failure(size_t fail_after, bool long_format,
     assert(strstr(diagnostic, "format") != NULL);
     assert(strstr(diagnostic, "standard output") == NULL);
     assert(strstr(output, "later:\n") != NULL);
+    /* A failed file must not consume later regular-file operands. */
+    if (!directory) {
+        assert(strstr(output, "third\n") != NULL);
+        if (strcmp(affected_path, "second:") == 0)
+            assert(strstr(output, "first\n") != NULL);
+    }
     assert(fclose(out) == 0 && fclose(err) == 0);
 }
 
@@ -125,6 +131,8 @@ int main(void)
     assert(file != NULL && fclose(file) == 0);
     file = fopen("second", "w");
     assert(file != NULL && fclose(file) == 0);
+    file = fopen("third", "w");
+    assert(file != NULL && fclose(file) == 0);
     assert(mkdir("later", 0700) == 0 && mkdir("tree", 0700) == 0);
     file = fopen("tree/child", "w");
     assert(file != NULL && fclose(file) == 0);
@@ -136,7 +144,8 @@ int main(void)
     formatter_failure(0, false, true, "tree:");
     formatter_failure(1, false, true, "tree/child:");
     terminal_heading_default();
-    assert(unlink("first") == 0 && unlink("second") == 0);
+    assert(unlink("first") == 0 && unlink("second") == 0 &&
+        unlink("third") == 0);
     assert(unlink("tree/child") == 0);
     assert(rmdir("tree") == 0 && rmdir("later") == 0);
     assert(rmdir("tty\001\n") == 0);

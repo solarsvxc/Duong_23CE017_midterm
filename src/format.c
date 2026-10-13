@@ -420,7 +420,7 @@ static int print_prefix(FILE *out, const PrefixFields *fields,
 }
 
 static int long_listing(FILE *out, const EntryList *list,
-    const Options *options, const char **error_path)
+    const Options *options, const char **error_path, FormatProgress *progress)
 {
     LongFields *fields;
     LongWidths widths = {0};
@@ -438,6 +438,8 @@ static int long_listing(FILE *out, const EntryList *list,
     if (fields == NULL)
         return -1;
     for (i = 0; i < list->length; ++i) {
+        if (progress != NULL)
+            progress->failed_index = i;
         if (error_path != NULL)
             *error_path = list->items[i].path;
         if (prefix_fields(&list->items[i], options, &fields[i].prefix) != 0 ||
@@ -457,6 +459,8 @@ static int long_listing(FILE *out, const EntryList *list,
         char *name;
         int written;
 
+        if (progress != NULL)
+            progress->failed_index = i;
         if (error_path != NULL)
             *error_path = entry->path;
         name = format_display_name(entry->name, options->name_mode);
@@ -487,6 +491,8 @@ static int long_listing(FILE *out, const EntryList *list,
             goto cleanup;
         if (fputc('\n', out) == EOF)
             goto cleanup;
+        if (progress != NULL)
+            ++progress->completed_entries;
     }
     result = ferror(out) ? -1 : 0;
 
@@ -502,13 +508,15 @@ cleanup:
 }
 
 int format_listing(FILE *out, const EntryList *list, const Options *options,
-    bool directory_contents, const char **error_path)
+    bool directory_contents, const char **error_path, FormatProgress *progress)
 {
     size_t i;
     PrefixWidths widths = {0};
 
     if (error_path != NULL)
         *error_path = NULL;
+    if (progress != NULL)
+        *progress = (FormatProgress){SIZE_MAX, 0};
     if (directory_contents && (options->long_format ||
         (options->show_blocks && options->stdout_is_tty))) {
         BlockSum sum = {0};
@@ -520,9 +528,11 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
             return -1;
     }
     if (options->long_format)
-        return long_listing(out, list, options, error_path);
+        return long_listing(out, list, options, error_path, progress);
     for (i = 0; i < list->length; ++i) {
         PrefixFields fields;
+        if (progress != NULL)
+            progress->failed_index = i;
         if (error_path != NULL)
             *error_path = list->items[i].path;
         if (prefix_fields(&list->items[i], options, &fields) != 0)
@@ -536,6 +546,8 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
             format_type_suffix(&list->items[i]) : '\0';
         int result, error;
 
+        if (progress != NULL)
+            progress->failed_index = i;
         if (error_path != NULL)
             *error_path = list->items[i].path;
         name = format_display_name(list->items[i].name, options->name_mode);
@@ -552,6 +564,8 @@ int format_listing(FILE *out, const EntryList *list, const Options *options,
         errno = error;
         if (result < 0)
             return -1;
+        if (progress != NULL)
+            ++progress->completed_entries;
     }
     return ferror(out) ? -1 : 0;
 }

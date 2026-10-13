@@ -82,7 +82,7 @@ Use a FreeBSD system with its base C compiler (`cc`), BSD `make`, `/bin/sh`,
 and standard utilities. The tests use FreeBSD `stat -f`, `touch -h`,
 `truncate`, `mkfifo`, `mktemp`, `id`, `cmp`, `diff`, `od`, `tr`, `grep`,
 `find`, `sleep`, and ordinary file/permission utilities. No third-party
-libraries are required. Git is optional for inspecting the local handoff.
+libraries are required. Git is needed to clone the repository, but not to build.
 Run as a normal user to exercise unreadable-directory checks; root skips
 those fixtures because it bypasses their permission restriction. A UTF-8
 locale enables additional formatter cases, which explicitly skip if absent.
@@ -105,7 +105,7 @@ make clean
 Compilation defaults to `cc -std=c11 -Wall -Wextra -Wpedantic -Werror`.
 Override standard make variables on the command line if needed, for example
 `make CC=clang`; retain the warning flags for delivery. `make unit-test`
-runs just the four C unit executables. `make test` builds the program,
+runs the five C unit executables. `make test` builds the program,
 runs those units, and runs the full CLI acceptance matrix.
 
 The fresh delivery gate on FreeBSD is:
@@ -127,6 +127,7 @@ make clean && make && make test && make clean && git status --short --ignored
 | `tests/test_entry.c` | Real collector fixtures and allocation-failure ownership checks. |
 | `tests/test_sort.c` | Comparator keys, ties, time precision and reverse ordering. |
 | `tests/test_format.c` | Fields, permission/type modes, locale, block arithmetic and output failures. |
+| `tests/test_main.c` | Command-level formatter failures, continued operands, and safe headings. |
 | `tests/test_ls.sh` | CLI fixtures, every option, combinations, precedence, errors and clean rebuild. |
 
 The CLI tests use isolated temporary directories, `LC_ALL=C`, `TZ=UTC`, and
@@ -167,16 +168,17 @@ The manual's archive-state type markers have no fixture or implementation
 branch here; ordinary FreeBSD headers do not provide their mode constants.
 They remain a platform-specific limitation if such headers are introduced.
 
-The authoring host is Windows and has no available C compiler, `make`, or
-POSIX shell. Source and test coverage were reviewed statically there; no
-FreeBSD build, shell syntax check, runtime red/green cycle, or passing test
-gate is claimed. The commands above must be run on FreeBSD before claiming
-runtime acceptance or warning-free compilation.
+The authoring host is Windows and has no available FreeBSD environment, C
+compiler, or `make`. The shell test script passed a syntax check with Git for
+Windows `sh`; no FreeBSD build or runtime test pass is claimed. Run the gate
+above on FreeBSD before claiming runtime acceptance or warning-free compilation.
 
-## Local delivery
+## Submission
 
-GitHub publication is not part of this local handoff. The deliverables are
-the source, headers, Makefile, tests, README and ignore rules. Generated
-`my_ls`, object files, four test executables, cores, `tmp/`, and local agent
-scratch `.superpowers/` are ignored and are not submission artifacts.
-`make clean` removes the program, source/test objects and test executables.
+GitHub repository: [solarsvxc/Duong_23CE017_midterm](https://github.com/solarsvxc/Duong_23CE017_midterm).
+This README is the project report. The repository contains the source,
+headers, Makefile, tests, report, and ignore rules. Generated `my_ls`, object
+files, five test executables, cores, `tmp/`, and local agent scratch
+`.superpowers/` are ignored and are not submission artifacts. `make clean`
+removes the program, source/test objects, and test executables. Submit this
+report through the e-learning system by the assigned due date.

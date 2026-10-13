@@ -77,12 +77,60 @@ static void print_listing(const EntryList *list, const Options *options,
 {
     const char *error_path;
     if (format_listing(stdout, list, options, directory_contents,
-        &error_path) == 0)
+        &error_path, NULL) == 0)
         return;
     if (ferror(stdout))
         *output_failed = true;
     else
         report_format_error(error_path == NULL ? path : error_path, had_error);
+}
+
+/* Keep the usual aligned group output. If formatting one file fails, retry
+ * only entries that were not written, skipping that file and continuing with
+ * later operands. A group-wide allocation failure gets a singleton fallback. */
+static void print_file_operands(const EntryList *files, const Options *options,
+    bool *had_error, bool *output_failed)
+{
+    size_t start = 0;
+
+    while (start < files->length && !*output_failed) {
+        EntryList remaining = {files->items + start,
+            files->length - start, files->length - start};
+        FormatProgress progress;
+        const char *error_path;
+        size_t i;
+
+        if (format_listing(stdout, &remaining, options, false,
+            &error_path, &progress) == 0)
+            return;
+        if (ferror(stdout)) {
+            *output_failed = true;
+            return;
+        }
+        report_format_error(error_path == NULL ? remaining.items[0].path :
+            error_path, had_error);
+
+        if (progress.failed_index == SIZE_MAX) {
+            /* No entry was written: the long-field array could not be
+             * allocated. Try each independent operand once. */
+            for (i = start; i < files->length && !*output_failed; ++i) {
+                EntryList single = {files->items + i, 1, 1};
+                print_listing(&single, options, false,
+                    single.items[0].path, had_error, output_failed);
+            }
+            return;
+        }
+        if (progress.completed_entries == 0) {
+            /* Long-field preparation or prefix measurement failed before
+             * output began; the valid preceding files still need printing. */
+            for (i = 0; i < progress.failed_index && !*output_failed; ++i) {
+                EntryList single = {remaining.items + i, 1, 1};
+                print_listing(&single, options, false,
+                    single.items[0].path, had_error, output_failed);
+            }
+        }
+        start += progress.failed_index + 1;
+    }
 }
 
 static void list_directory(const char *path, const Options *options,
@@ -164,8 +212,7 @@ int main(int argc, char *argv[])
     entry_list_sort(&files, &options);
     entry_list_sort(&directories, &options);
     if (files.length != 0) {
-        print_listing(&files, &options, false, files.items[0].path,
-            &had_error, &output_failed);
+        print_file_operands(&files, &options, &had_error, &output_failed);
         printed_section = true;
     }
 

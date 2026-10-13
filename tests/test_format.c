@@ -101,7 +101,8 @@ static void expect_listing_context(const EntryList *list, const Options *options
     char buffer[2048];
     size_t length;
     assert(out != NULL);
-    assert(format_listing(out, list, options, directory_contents, NULL) == 0);
+    assert(format_listing(out, list, options, directory_contents,
+        NULL, NULL) == 0);
     rewind(out);
     length = fread(buffer, 1, sizeof(buffer), out);
     assert(!ferror(out));
@@ -157,7 +158,7 @@ static void output_error(void)
     Options options = {.name_mode = NAME_RAW};
     FILE *out = fopen("/dev/null", "r");
     assert(out != NULL);
-    assert(format_listing(out, &list, &options, false, NULL) == -1);
+    assert(format_listing(out, &list, &options, false, NULL, NULL) == -1);
     assert(ferror(out));
     assert(fclose(out) == 0);
 }
@@ -374,7 +375,7 @@ static void long_empty_and_output_error(void)
         .name_mode = NAME_RAW};
     FILE *out = fopen("/dev/null", "r");
     assert(out != NULL);
-    assert(format_listing(out, &list, &options, false, NULL) == -1);
+    assert(format_listing(out, &list, &options, false, NULL, NULL) == -1);
     assert(ferror(out));
     assert(fclose(out) == 0);
     expect_listing(&empty, &options, "");
