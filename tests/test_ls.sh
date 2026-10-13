@@ -807,10 +807,17 @@ combined_nhstr()
     chmod 0644 alpha beta
     touch -t 202601020304.00 alpha
     touch -t 202602030405.00 beta
+    # Allocated blocks differ by filesystem; isolate each expected prefix.
+    run_listing -sh alpha
+    expect_success
+    alpha_blocks=$(sed -n '1s/ .*//p' "$case_root/stdout")
+    run_listing -sh beta
+    expect_success
+    beta_blocks=$(sed -n '1s/ .*//p' "$case_root/stdout")
     run_listing -nhstr beta alpha
     expect_success
-    expect_output "0B -rw-r--r-- 1 $(id -u) $(id -g) 1.5K Jan  2 03:04 alpha
-0B -rw-r--r-- 1 $(id -u) $(id -g) 2.0K Feb  3 04:05 beta
+    expect_output "$alpha_blocks -rw-r--r-- 1 $(id -u) $(id -g) 1.5K Jan  2 03:04 alpha
+$beta_blocks -rw-r--r-- 1 $(id -u) $(id -g) 2.0K Feb  3 04:05 beta
 "
 }
 
