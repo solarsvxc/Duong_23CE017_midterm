@@ -286,7 +286,7 @@ d_does_not_dereference_symlink()
 '
     run_listing -dn linked
     expect_success
-    expect_output "lrwxrwxrwx 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked -> target
+    expect_output "$(stat -f '%Sp' linked) 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked -> target
 "
 }
 
@@ -568,7 +568,7 @@ long_symlink_arrow()
     touch -h -t 202601020304.00 linked
     run_listing -nF linked
     expect_success
-    expect_output "lrwxrwxrwx 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked@ -> absent
+    expect_output "$(stat -f '%Sp' linked) 1 $(id -u) $(id -g) 6 Jan  2 03:04 linked@ -> absent
 "
 }
 
